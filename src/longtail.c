@@ -1767,7 +1767,7 @@ int Longtail_CreateVersionIndexRaw(
     uint32_t target_chunk_size,
     struct Longtail_VersionIndex** out_version_index)
 {
-    LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_INFO, "Longtail_CreateVersionIndexRaw(%p, %p, %s, %p, %p, %p, %p, %u, %p)",
+    LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_INFO, "Longtail_CreateVersionIndexRaw(%p, %p, %p, %p, %s, %p, %p, %u, %p)",
         storage_api,
         hash_api,
         job_api,
