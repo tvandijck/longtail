@@ -424,7 +424,13 @@ void Longtail_SetAllocAndFree(Longtail_Alloc_Func alloc, Longtail_Free_Func Long
 
 void* Longtail_Alloc(size_t s)
 {
-    return Longtail_Alloc_private ? Longtail_Alloc_private(s) : malloc(s);
+    void* result = Longtail_Alloc_private ? Longtail_Alloc_private(s) : malloc(s);
+    if (!result)
+    {
+        LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "Longtail_Alloc(%" PRIu64 ") failed with %d", s, ENOMEM);
+        return 0;
+    }
+    return result;
 }
 
 void Longtail_Free(void* p)
@@ -1015,33 +1021,33 @@ static int DynamicChunking(void* context, uint32_t job_id)
 {
     LONGTAIL_FATAL_ASSERT(context != 0, return EINVAL)
     struct HashJob* hash_job = (struct HashJob*)context;
+    char* path = 0;
+    int err = EINVAL;
+    Longtail_StorageAPI_HOpenFile file_handle = 0;
+    char* buffer = 0;
+    Longtail_HashAPI_HContext asset_hash_context = 0;
+    struct Longtail_Chunker* chunker = 0;
 
     hash_job->m_Err = GetPathHash(hash_job->m_HashAPI, hash_job->m_Path, hash_job->m_PathHash);
     if (hash_job->m_Err)
     {
-        LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "DynamicChunking(%p, %u) GetPathHash(%p, %s, %p) failed with %d", context, job_id, (void*)hash_job->m_HashAPI, hash_job->m_Path, (void*)hash_job->m_PathHash, hash_job->m_Err)
-        return 0;
+        goto bail;
     }
 
     if (IsDirPath(hash_job->m_Path))
     {
-        hash_job->m_Err = 0;
+        err = 0;
         *hash_job->m_AssetChunkCount = 0;
-        return 0;
+        goto bail;
     }
     uint32_t chunk_count = 0;
 
     struct Longtail_StorageAPI* storage_api = hash_job->m_StorageAPI;
-    char* path = storage_api->ConcatPath(storage_api, hash_job->m_RootPath, hash_job->m_Path);
-    Longtail_StorageAPI_HOpenFile file_handle;
-    int err = storage_api->OpenReadFile(storage_api, path, &file_handle);
+    path = storage_api->ConcatPath(storage_api, hash_job->m_RootPath, hash_job->m_Path);
+    err = storage_api->OpenReadFile(storage_api, path, &file_handle);
     if (err)
     {
-        LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "DynamicChunking(%p, %u) storage_api->OpenReadFile(%p, %s, %p) failed with %d", context, job_id, (void*)storage_api, path, (void*)&file_handle, err)
-        Longtail_Free(path);
-        path = 0;
-        hash_job->m_Err = err;
-        return 0;
+        goto bail;
     }
 
     uint64_t hash_size = hash_job->m_SizeRange;
@@ -1052,43 +1058,21 @@ static int DynamicChunking(void* context, uint32_t job_id)
     }
     else if (hash_size <= ChunkerWindowSize || hash_job->m_TargetChunkSize <= ChunkerWindowSize)
     {
-        char* buffer = (char*)Longtail_Alloc((size_t)hash_size);
+        buffer = (char*)Longtail_Alloc((size_t)hash_size);
         if (!buffer)
         {
-            LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "DynamicChunking(%p, %u) Longtail_Alloc(%" PRIu64 ") failed with %d", context, job_id, hash_size, err)
-            storage_api->CloseFile(storage_api, file_handle);
-            file_handle = 0;
-            Longtail_Free(path);
-            path = 0;
-            hash_job->m_Err = err;
-            return 0;
+            goto bail;
         }
         err = storage_api->Read(storage_api, file_handle, 0, hash_size, buffer);
         if (err)
         {
-            LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "DynamicChunking(%p, %u) storage_api->Read(%p, %s, %" PRIu64 ", %" PRIu64 ", %p) failed with %d", context, job_id, (void*)storage_api, path, 0, hash_size, (void*)buffer, err)
-            Longtail_Free(buffer);
-            buffer = 0;
-            storage_api->CloseFile(storage_api, file_handle);
-            file_handle = 0;
-            Longtail_Free(path);
-            path = 0;
-            hash_job->m_Err = err;
-            return 0;
+            goto bail;
         }
 
         err = hash_job->m_HashAPI->HashBuffer(hash_job->m_HashAPI, (uint32_t)hash_size, buffer, &hash_job->m_ChunkHashes[chunk_count]);
         if (err)
         {
-            LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "DynamicChunking(%p, %u) m_HashAPI->HashBuffer(%p, %u, %p, %p) failed with %d", context, job_id, (void*)hash_job->m_HashAPI, hash_size, (void*)buffer, (void*)&hash_job->m_ChunkHashes[chunk_count], err)
-            Longtail_Free(buffer);
-            buffer = 0;
-            storage_api->CloseFile(storage_api, file_handle);
-            file_handle = 0;
-            Longtail_Free(path);
-            path = 0;
-            hash_job->m_Err = err;
-            return 0;
+            goto bail;
         }
 
         Longtail_Free(buffer);
@@ -1117,7 +1101,6 @@ static int DynamicChunking(void* context, uint32_t job_id)
 
         struct Longtail_ChunkerParams chunker_params = { min_chunk_size, avg_chunk_size, max_chunk_size };
 
-        struct Longtail_Chunker* chunker;
         err = Longtail_CreateChunker(
             &chunker_params,
             StorageChunkFeederFunc,
@@ -1126,26 +1109,13 @@ static int DynamicChunking(void* context, uint32_t job_id)
 
         if (err)
         {
-            LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "DynamicChunking(%p, %u) Longtail_CreateChunker(%p, %p, %p, %p) failed with %d", context, job_id, (void*)&chunker_params, (void*)StorageChunkFeederFunc, (void*)&feeder_context, (void*)&chunker, err)
-            storage_api->CloseFile(storage_api, file_handle);
-            file_handle = 0;
-            Longtail_Free(path);
-            path = 0;
-            hash_job->m_Err = err;
-            return 0;
+            goto bail;
         }
 
-        Longtail_HashAPI_HContext asset_hash_context;
         err = hash_job->m_HashAPI->BeginContext(hash_job->m_HashAPI, &asset_hash_context);
         if (err)
         {
-            LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "DynamicChunking(%p, %u) m_HashAPI->BeginContext(%p, %p) failed with %d", context, job_id, (void*)hash_job->m_HashAPI, (void*)&asset_hash_context, err)
-            storage_api->CloseFile(storage_api, file_handle);
-            file_handle = 0;
-            Longtail_Free(path);
-            path = 0;
-            hash_job->m_Err = err;
-            return 0;
+            goto bail;
         }
 
         uint64_t remaining = hash_size;
@@ -1177,6 +1147,7 @@ static int DynamicChunking(void* context, uint32_t job_id)
         }
 
         content_hash = hash_job->m_HashAPI->EndContext(hash_job->m_HashAPI, asset_hash_context);
+        asset_hash_context = 0;
         Longtail_Free(chunker);
         chunker = 0;
     }
@@ -1187,10 +1158,24 @@ static int DynamicChunking(void* context, uint32_t job_id)
     LONGTAIL_FATAL_ASSERT(chunk_count <= hash_job->m_MaxChunkCount, hash_job->m_Err = EINVAL; return 0)
     *hash_job->m_AssetChunkCount = chunk_count;
 
-    Longtail_Free((char*)path);
-    path = 0;
-
-    hash_job->m_Err = 0;
+    err = 0;
+bail:
+    if (err)
+    {
+        LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "DynamicChunking(%p, %u) failed with %d", context, job_id, err)
+    }
+    Longtail_Free(chunker);
+    if (asset_hash_context)
+    {
+        hash_job->m_HashAPI->EndContext(hash_job->m_HashAPI, asset_hash_context);
+    }
+    Longtail_Free(buffer);
+    if (file_handle)
+    {
+        storage_api->CloseFile(storage_api, file_handle);
+    }
+    Longtail_Free(path);
+    hash_job->m_Err = err;
     return 0;
 }
 
