@@ -502,11 +502,14 @@ static int GetPathHash(struct Longtail_HashAPI* hash_api, const char* path, TLon
     int err = hash_api->HashBuffer(hash_api, (uint32_t)strlen(path), (void*)path, &hash);
     if (err)
     {
-        LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "GetPathHash(%p, %s, %p) hash_api->HashBuffer() failed with %d", (void*)hash_api, path, (void*)out_hash, err)
-        return err;
+        goto on_error;
     }
     *out_hash = (TLongtail_Hash)hash;
-    return 0;
+end:
+    return err;
+on_error:
+    LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "GetPathHash(%p, %s, %p) hash_api->HashBuffer() failed with %d", (void*)hash_api, path, (void*)out_hash, err)
+    goto end;
 }
 
 static int SafeCreateDir(struct Longtail_StorageAPI* storage_api, const char* path)
@@ -514,64 +517,64 @@ static int SafeCreateDir(struct Longtail_StorageAPI* storage_api, const char* pa
     LONGTAIL_FATAL_ASSERT(storage_api != 0, return EINVAL)
     LONGTAIL_FATAL_ASSERT(path != 0, return EINVAL)
     int err = storage_api->CreateDir(storage_api, path);
-    if (!err)
+    if (err)
     {
-        return 0;
+        if (!storage_api->IsDir(storage_api, path))
+        {
+            goto on_error;
+        }
+        err = 0;
     }
-    if (storage_api->IsDir(storage_api, path))
-    {
-        return 0;
-    }
-    LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "SafeCreateDir(%p, %s) failed with %d", (void*)storage_api, path, err)
+end:
     return err;
+on_error:
+    LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "SafeCreateDir(%p, %s) failed with %d", (void*)storage_api, path, err)
+    goto end;
 }
 
 int EnsureParentPathExists(struct Longtail_StorageAPI* storage_api, const char* path)
 {
     LONGTAIL_FATAL_ASSERT(storage_api != 0, return EINVAL)
     LONGTAIL_FATAL_ASSERT(path != 0, return EINVAL)
+    int err = EINVAL;
+    char* dir_path = 0;
 
-    char* dir_path = Longtail_Strdup(path);
+    dir_path = Longtail_Strdup(path);
     if (!dir_path)
     {
-        LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "EnsureParentPathExists(%p ,%s) Longtail_Strdup(%s) failed with %d", (void*)storage_api, path, path, ENOMEM)
-        return ENOMEM;
+        err = ENOMEM;
+        goto on_error;
     }
     char* last_path_delimiter = (char*)strrchr(dir_path, '/');
     if (last_path_delimiter == 0)
     {
-        Longtail_Free(dir_path);
-        dir_path = 0;
-        return 0;
+        err = 0;
+        goto end;
     }
     *last_path_delimiter = '\0';
     if (storage_api->IsDir(storage_api, dir_path))
     {
-        Longtail_Free(dir_path);
-        dir_path = 0;
-        return 0;
+        err = 0;
+        goto end;
     }
 
-    int err = EnsureParentPathExists(storage_api, dir_path);
+    err = EnsureParentPathExists(storage_api, dir_path);
     if (err)
     {
-        LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "EnsureParentPathExists(%p ,%s) EnsureParentPathExists(%s) failed with %d", (void*)storage_api, path, dir_path, err)
-        Longtail_Free(dir_path);
-        dir_path = 0;
-        return err;
+        goto on_error;
     }
     err = SafeCreateDir(storage_api, dir_path);
     if (err)
     {
-        LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "EnsureParentPathExists(%p ,%s) SafeCreateDir(%p, %s) failed with %d", (void*)storage_api, path, (void*)storage_api, dir_path, err)
-        Longtail_Free(dir_path);
-        dir_path = 0;
-        return err;
+        goto on_error;
     }
-
+end:
     Longtail_Free(dir_path);
     dir_path = 0;
-    return 0;
+    return err;
+on_error:
+    LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "EnsureParentPathExists(%p ,%s) failed with %d", (void*)storage_api, path, err)
+    goto end;
 }
 
 
@@ -728,14 +731,13 @@ static size_t GetFileInfosSize(uint32_t path_count, uint32_t path_data_size)
 static struct Longtail_FileInfos* CreateFileInfos(uint32_t path_count, uint32_t path_data_size)
 {
     LONGTAIL_FATAL_ASSERT((path_count == 0 && path_data_size == 0) || (path_count > 0 && path_data_size > path_count), return 0)
+    int err = EINVAL;
     size_t file_infos_size = GetFileInfosSize(path_count, path_data_size);
     struct Longtail_FileInfos* file_infos = (struct Longtail_FileInfos*)Longtail_Alloc(file_infos_size);
     if (!file_infos)
     {
-        LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "CreatePaths(`%u`, `%u`) Longtail_Alloc(%" PRIu64 ") failed with %d",
-            path_count, path_data_size, file_infos_size,
-            ENOMEM)
-        return 0;
+        err = ENOMEM;
+        goto on_error;
     }
     char* p = (char*)&file_infos[1];
     file_infos->m_Count = 0;
@@ -747,7 +749,14 @@ static struct Longtail_FileInfos* CreateFileInfos(uint32_t path_count, uint32_t 
     file_infos->m_Permissions = (uint16_t*)p;
     p += sizeof(uint16_t) * path_count;
     file_infos->m_PathData = p;
+    err = 0;
+end:
     return file_infos;
+on_error:
+    LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "CreatePaths(`%u`, `%u`) Longtail_Alloc(%" PRIu64 ") failed with %d",
+        path_count, path_data_size, file_infos_size,
+        err)
+    goto end;
 };
 
 int Longtail_MakeFileInfos(
@@ -763,6 +772,7 @@ int Longtail_MakeFileInfos(
     LONGTAIL_VALIDATE_INPUT((path_count == 0 && file_sizes == 0) || (path_count > 0 && file_sizes != 0), return 0)
     LONGTAIL_VALIDATE_INPUT((path_count == 0 && file_permissions == 0) || (path_count > 0 && file_permissions != 0), return 0)
     LONGTAIL_VALIDATE_INPUT(out_file_infos != 0, return 0)
+    int err = EINVAL;
 
     uint32_t name_data_size = 0;
     for (uint32_t i = 0; i < path_count; ++i)
@@ -772,11 +782,8 @@ int Longtail_MakeFileInfos(
     struct Longtail_FileInfos* file_infos = CreateFileInfos(path_count, name_data_size);
     if (file_infos == 0)
     {
-        LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "Longtail_MakeFileInfos(%u, %p, %p, %p, %p) CreatePaths(%u, %u) failed with %d",
-            path_count, (void*)path_names, file_sizes, file_permissions, (void*)out_file_infos,
-            name_data_size,
-            ENOMEM)
-        return ENOMEM;
+        err = ENOMEM;
+        goto on_error;
     }
     uint32_t offset = 0;
     for (uint32_t i = 0; i < path_count; ++i)
@@ -791,7 +798,14 @@ int Longtail_MakeFileInfos(
     file_infos->m_PathDataSize = offset;
     file_infos->m_Count = path_count;
     *out_file_infos = file_infos;
-    return 0;
+    err = 0;
+end:
+    return err;
+on_error:
+    LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "Longtail_MakeFileInfos(%u, %p, %p, %p, %p) failed with %d",
+        path_count, (void*)path_names, file_sizes, file_permissions, (void*)out_file_infos,
+        err)
+    goto end;
 }
 
 static int AppendPath(
@@ -809,6 +823,8 @@ static int AppendPath(
     LONGTAIL_FATAL_ASSERT(max_data_size != 0, return EINVAL)
     LONGTAIL_FATAL_ASSERT(path_count_increment > 0, return EINVAL)
     LONGTAIL_FATAL_ASSERT(data_size_increment > 0, return EINVAL)
+    int err = EINVAL;
+    struct Longtail_FileInfos* new_file_infos = 0;
     uint32_t path_size = (uint32_t)(strlen(path) + 1);
 
     int out_of_path_data = (*file_infos)->m_PathDataSize + path_size > *max_data_size;
@@ -820,11 +836,11 @@ static int AppendPath(
 
         const uint32_t new_path_count = *max_path_count + extra_path_count;
         const uint32_t new_path_data_size = *max_data_size + extra_path_data_size;
-        struct Longtail_FileInfos* new_file_infos = CreateFileInfos(new_path_count, new_path_data_size);
+        new_file_infos = CreateFileInfos(new_path_count, new_path_data_size);
         if (new_file_infos == 0)
         {
-            LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "AppendPath(%p, %s, %p, %p, %u, %u) CreateFileInfos(%u, %u) failed with %d", (void*)file_infos, path, (void*)max_path_count, (void*)max_data_size, path_count_increment, data_size_increment, new_path_count, new_path_data_size, ENOMEM)
-            return ENOMEM;
+            err = ENOMEM;
+            goto on_error;
         }
         *max_path_count = new_path_count;
         *max_data_size = new_path_data_size;
@@ -838,6 +854,7 @@ static int AppendPath(
 
         Longtail_Free(*file_infos);
         *file_infos = new_file_infos;
+        new_file_infos = 0;
     }
 
     memmove(&(*file_infos)->m_PathData[(*file_infos)->m_PathDataSize], path, path_size);
@@ -846,8 +863,15 @@ static int AppendPath(
     (*file_infos)->m_Sizes[(*file_infos)->m_Count] = file_size;
     (*file_infos)->m_Permissions[(*file_infos)->m_Count] = file_permissions;
     (*file_infos)->m_Count++;
-
-    return 0;
+    err = 0;
+end:
+    Longtail_Free(new_file_infos);
+    return err;
+on_error:
+    LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "AppendPath(%p, %s, %p, %p, %u, %u) failed with %d",
+        (void*)file_infos, path, (void*)max_path_count, (void*)max_data_size, path_count_increment, data_size_increment,
+        err)
+    goto end;
 }
 
 struct AddFile_Context {
@@ -863,27 +887,35 @@ static int AddFile(void* context, const char* root_path, const char* file_name, 
     LONGTAIL_FATAL_ASSERT(context != 0, return EINVAL)
     LONGTAIL_FATAL_ASSERT(root_path != 0, return EINVAL)
     LONGTAIL_FATAL_ASSERT(file_name != 0, return EINVAL)
+    int err = EINVAL;
+    char* full_path = 0;
+    char* full_dir_path = 0;
+
     struct AddFile_Context* paths_context = (struct AddFile_Context*)context;
     struct Longtail_StorageAPI* storage_api = paths_context->m_StorageAPI;
 
-    char* full_path = storage_api->ConcatPath(storage_api, root_path, file_name);
+    full_path = storage_api->ConcatPath(storage_api, root_path, file_name);
+    if (!full_path)
+    {
+        err = ENOMEM;
+        goto on_error;
+    }
+
     if (is_dir)
     {
         uint32_t path_length = (uint32_t)strlen(full_path);
         size_t full_dir_path_size = path_length + 1 + 1;
-        char* full_dir_path = (char*)Longtail_Alloc(full_dir_path_size);
+        full_dir_path = (char*)Longtail_Alloc(full_dir_path_size);
         if (!full_dir_path)
         {
-            LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "AddFile(%p, %s, %s, %d, %" PRIu64 ", %u) Longtail_Alloc(%" PRIu64 ") failed with %d",
-                context, root_path, file_name, is_dir, size, permissions,
-                full_dir_path_size,
-                ENOMEM)
-            return ENOMEM;
+            err = ENOMEM;
+            goto on_error;
         }
         strcpy(full_dir_path, full_path);
         strcpy(&full_dir_path[path_length], "/");
         Longtail_Free(full_path);
         full_path = full_dir_path;
+        full_dir_path = 0;
     }
 
     const uint32_t root_path_length = paths_context->m_RootPathLength;
@@ -893,20 +925,20 @@ static int AddFile(void* context, const char* root_path, const char* file_name, 
         ++s;
     }
 
-    int err = AppendPath(&paths_context->m_FileInfos, s, size, permissions, &paths_context->m_ReservedPathCount, &paths_context->m_ReservedPathSize, 512, 128);
+    err = AppendPath(&paths_context->m_FileInfos, s, size, permissions, &paths_context->m_ReservedPathCount, &paths_context->m_ReservedPathSize, 512, 128);
     if (err)
     {
-        LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "AddFile(%p, %s, %s, %d, %" PRIu64 ", %u) AppendPath(%p, %s, %" PRIu64 ", %u, %p, %p, %u, %u) failed with %d",
-            context, root_path, file_name, is_dir, size, permissions,
-            &paths_context->m_FileInfos, s, size, permissions, &paths_context->m_ReservedPathCount, &paths_context->m_ReservedPathSize, 512, 128,
-            err)
-        Longtail_Free(full_path);
-        return err;
+        goto on_error;
     }
-
+end:
+    Longtail_Free(full_dir_path);
     Longtail_Free(full_path);
-    full_path = 0;
-    return 0;
+    return err;
+on_error:
+    LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "AddFile(%p, %s, %s, %d, %" PRIu64 ", %u) failed with %d",
+        context, root_path, file_name, is_dir, size, permissions,
+        err)
+    goto end;
 }
 
 int Longtail_GetFilesRecursively(
@@ -919,37 +951,37 @@ int Longtail_GetFilesRecursively(
     LONGTAIL_VALIDATE_INPUT(storage_api != 0, return EINVAL)
     LONGTAIL_VALIDATE_INPUT(root_path != 0, return EINVAL)
     LONGTAIL_VALIDATE_INPUT(out_file_infos != 0, return EINVAL)
+    int err = EINVAL;
+    struct Longtail_FileInfos* file_infos = 0;
 
     const uint32_t default_path_count = 512;
     const uint32_t default_path_data_size = default_path_count * 128;
 
-    struct Longtail_FileInfos* file_infos = CreateFileInfos(default_path_count, default_path_data_size);
+    file_infos = CreateFileInfos(default_path_count, default_path_data_size);
     if (!file_infos)
     {
-        LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "Longtail_GetFilesRecursively(%p, %s, %p) CreateFileInfos(%u, %u) failed with %d",
-            storage_api, root_path, out_file_infos,
-            default_path_count, default_path_data_size,
-            ENOMEM)
-        return ENOMEM;
+        err = ENOMEM;
+        goto on_error;
     }
     struct AddFile_Context context = {storage_api, default_path_count, default_path_data_size, (uint32_t)(strlen(root_path)), file_infos};
     file_infos = 0;
 
-    int err = RecurseTree(storage_api, optional_path_filter_api, root_path, AddFile, &context);
+    err = RecurseTree(storage_api, optional_path_filter_api, root_path, AddFile, &context);
     if(err)
     {
-        LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "Longtail_GetFilesRecursively(%p, %s, %p) RecurseTree(%p, %s, %p, %p) failed with %d",
-            storage_api, root_path, out_file_infos,
-            (void*)storage_api, root_path, (void*)AddFile, (void*)&context,
-            err)
-        Longtail_Free(context.m_FileInfos);
-        context.m_FileInfos = 0;
-        return err;
+        goto on_error;
     }
 
     *out_file_infos = context.m_FileInfos;
     context.m_FileInfos = 0;
-    return 0;
+end:
+    Longtail_Free(context.m_FileInfos);
+    return err;
+on_error:
+    LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "Longtail_GetFilesRecursively(%p, %s, %p) failed with %d",
+        storage_api, root_path, out_file_infos,
+        err)
+    goto end;
 }
 
 struct StorageChunkFeederContext
@@ -969,6 +1001,7 @@ static int StorageChunkFeederFunc(void* context, struct Longtail_Chunker* chunke
     LONGTAIL_FATAL_ASSERT(requested_size > 0, return EINVAL)
     LONGTAIL_FATAL_ASSERT(buffer != 0, return EINVAL)
     LONGTAIL_FATAL_ASSERT(out_size != 0, return EINVAL)
+    int err = EINVAL;
     struct StorageChunkFeederContext* c = (struct StorageChunkFeederContext*)context;
     uint64_t read_count = c->m_Size - c->m_Offset;
     if (read_count > 0)
@@ -977,16 +1010,22 @@ static int StorageChunkFeederFunc(void* context, struct Longtail_Chunker* chunke
         {
             read_count = requested_size;
         }
-        int err = c->m_StorageAPI->Read(c->m_StorageAPI, c->m_AssetFile, c->m_StartRange + c->m_Offset, (uint32_t)read_count, buffer);
+        err = c->m_StorageAPI->Read(c->m_StorageAPI, c->m_AssetFile, c->m_StartRange + c->m_Offset, (uint32_t)read_count, buffer);
         if (err)
         {
-            LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "StorageChunkFeederFunc(%p, %p, %u, %p, %p) m_StorageAPI->Read(%p, %s, %" PRIu64 ", %" PRIu64 ", %p) failed with %d", context, (void*)chunker, requested_size, (void*)buffer, (void*)out_size, (void*)c->m_StorageAPI, c->m_AssetPath, c->m_StartRange + c->m_Offset, read_count, (void*)buffer, err)
-            return err;
+            goto on_error;
         }
         c->m_Offset += read_count;
     }
     *out_size = (uint32_t)read_count;
-    return 0;
+    err = 0;
+end:
+    return err;
+on_error:
+    LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "StorageChunkFeederFunc(%p, %p, %u, %p, %p) failed with %d",
+        context, (void*)chunker, requested_size, (void*)buffer, (void*)out_size,
+        err)
+    goto end;
 }
 
 // ChunkerWindowSize is the number of bytes in the rolling hash window
@@ -1028,17 +1067,17 @@ static int DynamicChunking(void* context, uint32_t job_id)
     Longtail_HashAPI_HContext asset_hash_context = 0;
     struct Longtail_Chunker* chunker = 0;
 
-    hash_job->m_Err = GetPathHash(hash_job->m_HashAPI, hash_job->m_Path, hash_job->m_PathHash);
-    if (hash_job->m_Err)
+    err = GetPathHash(hash_job->m_HashAPI, hash_job->m_Path, hash_job->m_PathHash);
+    if (err)
     {
-        goto bail;
+        goto on_error;
     }
 
     if (IsDirPath(hash_job->m_Path))
     {
         err = 0;
         *hash_job->m_AssetChunkCount = 0;
-        goto bail;
+        goto end;
     }
     uint32_t chunk_count = 0;
 
@@ -1047,7 +1086,7 @@ static int DynamicChunking(void* context, uint32_t job_id)
     err = storage_api->OpenReadFile(storage_api, path, &file_handle);
     if (err)
     {
-        goto bail;
+        goto on_error;
     }
 
     uint64_t hash_size = hash_job->m_SizeRange;
@@ -1061,18 +1100,19 @@ static int DynamicChunking(void* context, uint32_t job_id)
         buffer = (char*)Longtail_Alloc((size_t)hash_size);
         if (!buffer)
         {
-            goto bail;
+            err = ENOMEM;
+            goto on_error;
         }
         err = storage_api->Read(storage_api, file_handle, 0, hash_size, buffer);
         if (err)
         {
-            goto bail;
+            goto on_error;
         }
 
         err = hash_job->m_HashAPI->HashBuffer(hash_job->m_HashAPI, (uint32_t)hash_size, buffer, &hash_job->m_ChunkHashes[chunk_count]);
         if (err)
         {
-            goto bail;
+            goto on_error;
         }
 
         Longtail_Free(buffer);
@@ -1109,13 +1149,13 @@ static int DynamicChunking(void* context, uint32_t job_id)
 
         if (err)
         {
-            goto bail;
+            goto on_error;
         }
 
         err = hash_job->m_HashAPI->BeginContext(hash_job->m_HashAPI, &asset_hash_context);
         if (err)
         {
-            goto bail;
+            goto on_error;
         }
 
         uint64_t remaining = hash_size;
@@ -1125,16 +1165,7 @@ static int DynamicChunking(void* context, uint32_t job_id)
             err = hash_job->m_HashAPI->HashBuffer(hash_job->m_HashAPI, r.len, (void*)r.buf, &hash_job->m_ChunkHashes[chunk_count]);
             if (err != 0)
             {
-                LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "DynamicChunking(%p, %u) m_HashAPI->HashBuffer(%p, %u, %p, %p) for %s failed with %d", context, job_id, (void*)hash_job->m_HashAPI, r.len, (void*)r.buf, (void*)&hash_job->m_ChunkHashes[chunk_count], err)
-                Longtail_Free(chunker);
-                chunker = 0;
-                hash_job->m_HashAPI->EndContext(hash_job->m_HashAPI, asset_hash_context);
-                storage_api->CloseFile(storage_api, file_handle);
-                file_handle = 0;
-                Longtail_Free(path);
-                path = 0;
-                hash_job->m_Err = err;
-                return 0;
+                goto on_error;
             }
             hash_job->m_ChunkSizes[chunk_count] = r.len;
             hash_job->m_ChunkTags[chunk_count] = hash_job->m_ContentTag;
@@ -1155,15 +1186,10 @@ static int DynamicChunking(void* context, uint32_t job_id)
     storage_api->CloseFile(storage_api, file_handle);
     file_handle = 0;
     
-    LONGTAIL_FATAL_ASSERT(chunk_count <= hash_job->m_MaxChunkCount, hash_job->m_Err = EINVAL; return 0)
+    LONGTAIL_FATAL_ASSERT(chunk_count <= hash_job->m_MaxChunkCount, err = EINVAL; goto on_error)
     *hash_job->m_AssetChunkCount = chunk_count;
-
     err = 0;
-bail:
-    if (err)
-    {
-        LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "DynamicChunking(%p, %u) failed with %d", context, job_id, err)
-    }
+end:
     Longtail_Free(chunker);
     if (asset_hash_context)
     {
@@ -1177,6 +1203,12 @@ bail:
     Longtail_Free(path);
     hash_job->m_Err = err;
     return 0;
+on_error:
+    if (err)
+    {
+        LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "DynamicChunking(%p, %u) failed with %d", context, job_id, err)
+    }
+    goto end;
 }
 
 static int ChunkAssets(
