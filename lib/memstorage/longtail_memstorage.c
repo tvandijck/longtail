@@ -620,6 +620,17 @@ static const char* InMemStorageAPI_GetDirectoryName(struct Longtail_StorageAPI* 
     return instance->m_PathEntries[*i].m_FileName;
 }
 
+static char* InMemStorageAPI_GetEntryName(struct Longtail_StorageAPI* storage_api, Longtail_StorageAPI_HIterator iterator, struct Longtail_StorageAPI_EntryProperties* entry_properties)
+{
+    LONGTAIL_FATAL_ASSERT(storage_api != 0, return 0);
+    LONGTAIL_FATAL_ASSERT(iterator != 0, return 0);
+    LONGTAIL_FATAL_ASSERT(entry_properties != 0, return 0);
+    struct InMemStorageAPI* instance = (struct InMemStorageAPI*)storage_api;
+    uint32_t* i = (uint32_t*)iterator;
+    const char* name = instance->m_PathEntries[*i].m_FileName;
+    return Longtail_Strdup(name);
+}
+
 static int InMemStorageAPI_GetEntryProperties(struct Longtail_StorageAPI* storage_api, Longtail_StorageAPI_HIterator iterator, struct Longtail_StorageAPI_EntryProperties* out_properties)
 {
     LONGTAIL_VALIDATE_INPUT(storage_api != 0, return EINVAL);
@@ -638,7 +649,6 @@ static int InMemStorageAPI_GetEntryProperties(struct Longtail_StorageAPI* storag
         out_properties->m_IsDir = 0;
     }
     out_properties->m_Permissions = instance->m_PathEntries[*i].m_Permissions;
-    out_properties->m_Name = instance->m_PathEntries[*i].m_FileName;
     return 0;
 }
 
@@ -664,6 +674,7 @@ static int InMemStorageAPI_Init(struct InMemStorageAPI* storage_api)
     storage_api->m_InMemStorageAPI.FindNext = InMemStorageAPI_FindNext;
     storage_api->m_InMemStorageAPI.CloseFind = InMemStorageAPI_CloseFind;
     storage_api->m_InMemStorageAPI.GetEntryProperties = InMemStorageAPI_GetEntryProperties;
+    storage_api->m_InMemStorageAPI.GetEntryName = InMemStorageAPI_GetEntryName;
 
     storage_api->m_PathHashToContent = 0;
     storage_api->m_PathEntries = 0;

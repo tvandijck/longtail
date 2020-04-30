@@ -311,6 +311,15 @@ static void FSStorageAPI_CloseFind(struct Longtail_StorageAPI* storage_api, Long
 	Longtail_Free(iterator);
 }
 
+static char* FSStorageAPI_GetEntryName(struct Longtail_StorageAPI* storage_api, Longtail_StorageAPI_HIterator iterator, struct Longtail_StorageAPI_EntryProperties* entry_properties)
+{
+    LONGTAIL_FATAL_ASSERT(storage_api != 0, return 0);
+    LONGTAIL_FATAL_ASSERT(iterator != 0, return 0);
+    LONGTAIL_FATAL_ASSERT(entry_properties != 0, return 0);
+    const char* name = (entry_properties->m_IsDir) ? Longtail_GetDirectoryName((HLongtail_FSIterator)iterator) : Longtail_GetFileName((HLongtail_FSIterator)iterator);
+    return Longtail_Strdup(name);
+}
+
 static int FSStorageAPI_GetEntryProperties(struct Longtail_StorageAPI* storage_api, Longtail_StorageAPI_HIterator iterator, struct Longtail_StorageAPI_EntryProperties* out_properties)
 {
     LONGTAIL_FATAL_ASSERT(storage_api != 0, return EINVAL);
@@ -324,7 +333,6 @@ static int FSStorageAPI_GetEntryProperties(struct Longtail_StorageAPI* storage_a
             err)
         return err;
     }
-    out_properties->m_Name = (out_properties->m_IsDir) ? Longtail_GetDirectoryName((HLongtail_FSIterator)iterator) : Longtail_GetFileName((HLongtail_FSIterator)iterator);
     return 0;
 }
 
@@ -351,6 +359,7 @@ static void FSStorageAPI_Init(struct FSStorageAPI* storage_api)
     storage_api->m_FSStorageAPI.FindNext = FSStorageAPI_FindNext;
     storage_api->m_FSStorageAPI.CloseFind = FSStorageAPI_CloseFind;
     storage_api->m_FSStorageAPI.GetEntryProperties = FSStorageAPI_GetEntryProperties;
+    storage_api->m_FSStorageAPI.GetEntryName = FSStorageAPI_GetEntryName;
 }
 
 

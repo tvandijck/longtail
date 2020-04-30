@@ -224,7 +224,8 @@ struct Longtail_StorageAPI* Longtail_MakeStorageAPI(
     Longtail_Storage_StartFindFunc start_find_func,
     Longtail_Storage_FindNextFunc find_next_func,
     Longtail_Storage_CloseFindFunc close_find_func,
-    Longtail_Storage_GetEntryPropertiesFunc get_entry_properties_func)
+    Longtail_Storage_GetEntryPropertiesFunc get_entry_properties_func,
+    Longtail_Storage_GetEntryNameFunc get_entry_name_func)
 {
     LONGTAIL_VALIDATE_INPUT(mem != 0, return 0)
     struct Longtail_StorageAPI* api = (struct Longtail_StorageAPI*)mem;
@@ -248,6 +249,7 @@ struct Longtail_StorageAPI* Longtail_MakeStorageAPI(
     api->FindNext = find_next_func;
     api->CloseFind = close_find_func;
     api->GetEntryProperties = get_entry_properties_func;
+    api->GetEntryName = get_entry_name_func;
     return api;
 }
 
@@ -270,6 +272,7 @@ int Longtail_Storage_StartFind(struct Longtail_StorageAPI* storage_api, const ch
 int Longtail_Storage_FindNext(struct Longtail_StorageAPI* storage_api, Longtail_StorageAPI_HIterator iterator) { return storage_api->FindNext(storage_api, iterator); }
 void Longtail_Storage_CloseFind(struct Longtail_StorageAPI* storage_api, Longtail_StorageAPI_HIterator iterator) { storage_api->CloseFind(storage_api, iterator); }
 int Longtail_Storage_GetEntryProperties(struct Longtail_StorageAPI* storage_api, Longtail_StorageAPI_HIterator iterator, struct Longtail_StorageAPI_EntryProperties* out_properties) { return storage_api->GetEntryProperties(storage_api, iterator, out_properties); }
+char* Longtail_Storage_GetEntryName(struct Longtail_StorageAPI* storage_api, Longtail_StorageAPI_HIterator iterator, struct Longtail_StorageAPI_EntryProperties* entry_properties) { return storage_api->GetEntryName(storage_api, iterator, entry_properties); }
 
 uint64_t Longtail_GetProgressAPISize()
 {
@@ -609,7 +612,7 @@ struct HashToIndexItem
     uint64_t value;
 };
 
-typedef int (*ProcessEntry)(void* context, const char* root_path, const struct Longtail_StorageAPI_EntryProperties* properties);
+typedef int (*ProcessEntry)(void* context, const char* root_path, const char* name, const struct Longtail_StorageAPI_EntryProperties* properties);
 
 static int RecurseTree(
     struct Longtail_StorageAPI* storage_api,
@@ -685,15 +688,17 @@ static int RecurseTree(
             }
             else
             {
-                if (!optional_path_filter_api || optional_path_filter_api->Include(optional_path_filter_api, root_folder, asset_folder, properties.m_Name, properties.m_IsDir, properties.m_Size, properties.m_Permissions))
+                char* name = storage_api->GetEntryName(storage_api, fs_iterator, &properties);
+                if (!optional_path_filter_api || optional_path_filter_api->Include(optional_path_filter_api, root_folder, asset_folder, name, properties.m_IsDir, properties.m_Size, properties.m_Permissions))
                 {
-                    err = entry_processor(context, asset_folder, &properties);
+                    err = entry_processor(context, asset_folder, name, &properties);
                     if (err)
                     {
                         LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_WARNING, "RecurseTree(%p, %p, %p, %p, %s, %p, %p) entry_processor(%p, %s, %p) failed with %d",
                             (void*)storage_api, (void*)optional_path_filter_api, (void*)optional_cancel_api, (void*)optional_cancel_token, root_folder, (void*)entry_processor, context,
                             context, asset_folder, &properties,
                             err)
+                        Longtail_Free(name);
                         break;
                     }
                     if (properties.m_IsDir)
@@ -708,9 +713,10 @@ static int RecurseTree(
                                 folder_index = 0;
                             }
                         }
-                        arrput(folder_paths, storage_api->ConcatPath(storage_api, asset_folder, properties.m_Name));
+                        arrput(folder_paths, storage_api->ConcatPath(storage_api, asset_folder, name));
                     }
                 }
+                Longtail_Free(name);
             }
             err = storage_api->FindNext(storage_api, fs_iterator);
             if (err == ENOENT)
@@ -876,15 +882,15 @@ struct AddFile_Context {
     struct Longtail_FileInfos* m_FileInfos;
 };
 
-static int AddFile(void* context, const char* root_path, const struct Longtail_StorageAPI_EntryProperties* properties)
+static int AddFile(void* context, const char* root_path, const char* name, const struct Longtail_StorageAPI_EntryProperties* properties)
 {
     LONGTAIL_FATAL_ASSERT(context != 0, return EINVAL)
     LONGTAIL_FATAL_ASSERT(properties != 0, return EINVAL)
-    LONGTAIL_FATAL_ASSERT(properties->m_Name != 0, return EINVAL)
+    LONGTAIL_FATAL_ASSERT(name != 0, return EINVAL)
     struct AddFile_Context* paths_context = (struct AddFile_Context*)context;
     struct Longtail_StorageAPI* storage_api = paths_context->m_StorageAPI;
 
-    char* full_path = storage_api->ConcatPath(storage_api, root_path, properties->m_Name);
+    char* full_path = storage_api->ConcatPath(storage_api, root_path, name);
     if (properties->m_IsDir)
     {
         uint32_t path_length = (uint32_t)strlen(full_path);
@@ -893,7 +899,7 @@ static int AddFile(void* context, const char* root_path, const struct Longtail_S
         if (!full_dir_path)
         {
             LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "AddFile(%p, %s, %s, %d, %" PRIu64 ", %u) failed with %d",
-                context, root_path, properties->m_Name, properties->m_IsDir, properties->m_Size, properties->m_Permissions,
+                context, root_path, name, properties->m_IsDir, properties->m_Size, properties->m_Permissions,
                 ENOMEM)
             return ENOMEM;
         }
@@ -914,7 +920,7 @@ static int AddFile(void* context, const char* root_path, const struct Longtail_S
     if (err)
     {
         LONGTAIL_LOG(LONGTAIL_LOG_LEVEL_ERROR, "AddFile(%p, %s, %s, %d, %" PRIu64 ", %u) failed with %d",
-            context, root_path, properties->m_Name, properties->m_IsDir, properties->m_Size, properties->m_Permissions,
+            context, root_path, name, properties->m_IsDir, properties->m_Size, properties->m_Permissions,
             err)
         Longtail_Free(full_path);
         return err;

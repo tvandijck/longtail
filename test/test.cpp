@@ -2770,8 +2770,10 @@ static void Bench()
                 }
                 if (!properties.m_IsDir)
                 {
-                    const char* file_name = properties.m_Name;
+                    char* file_name = storage_api->GetEntryName(storage_api, fs_iterator, &properties);
                     char* target_path = storage_api->ConcatPath(storage_api, CONTENT_FOLDER, file_name);
+                    Longtail_Free(file_name);
+                    file_name = 0;
 
                     Longtail_StorageAPI_HOpenFile v;
                     if (0 == storage_api->OpenReadFile(storage_api, target_path, &v))
