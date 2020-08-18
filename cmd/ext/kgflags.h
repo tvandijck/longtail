@@ -373,14 +373,14 @@ bool kgflags_parse(int argc, char **argv) {
         _kgflags_parse_flag(flag, prefix_no);
     }
 
-    _kgflags_assign_default_values();
-
     for (int i = 0; i < _kgflags_g.flags_count; i++) {
         _kgflags_flag_t *flag = &_kgflags_g.flags[i];
-        if (flag->required && !flag->assigned && !flag->error) {
+        if (flag->required && !flag->assigned) {
             _kgflags_add_error(KGFLAGS_ERROR_KIND_UNASSIGNED_FLAG, flag->name, NULL);
         }
     }
+
+    _kgflags_assign_default_values();
 
     if (_kgflags_g.errors_count > 0) {
         return false;
@@ -660,8 +660,11 @@ static void _kgflags_assign_default_values() {
         }
         switch (flag->kind) {
             case KGFLAGS_FLAG_KIND_STRING: {
-                *flag->result.string_value = flag->default_value.string_value;
-                flag->assigned = true;
+                if (flag->default_value.string_value != NULL)
+                {
+                    *flag->result.string_value = flag->default_value.string_value;
+                    flag->assigned = true;
+                }
                 break;
             }
             case KGFLAGS_FLAG_KIND_BOOL: {
